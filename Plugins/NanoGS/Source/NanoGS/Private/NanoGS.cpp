@@ -5,6 +5,7 @@
 #include "GaussianSplatRenderer.h"
 #include "GaussianSplatSceneProxy.h"
 #include "GaussianGlobalAccumulator.h"
+#include "GaussianLandscapeClip.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "ShaderCore.h"
@@ -64,6 +65,13 @@ TAutoConsoleVariable<int32> CVarDebugForceLODLevel(
 	TEXT("  1+: Force specific LOD level (1 = first parent level, 2 = second, etc.)\n")
 	TEXT("Note: Higher levels have fewer, coarser splats. Max level depends on asset size.\n")
 	TEXT("Use with gs.ShowClusterBounds 2 to visualize which LOD level is being rendered."),
+	ECVF_RenderThreadSafe);
+
+TAutoConsoleVariable<float> CVarLandscapeClipBias(
+	TEXT("gs.LandscapeClipBias"),
+	0.0f,
+	TEXT("World-Z bias in cm when hiding Gaussian splats below the landscape.\n")
+	TEXT("Positive values hide a thin band above the terrain as well."),
 	ECVF_RenderThreadSafe);
 
 // Export for other modules
@@ -269,10 +277,12 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 		FMatrix CurrentVP = SceneView->ViewMatrices.GetViewMatrix() * SceneView->ViewMatrices.GetProjectionNoAAMatrix();
 		int32 CurrentDebugMode = DebugMode;
 		int32 CurrentDebugForceLODLevel = CVarDebugForceLODLevel.GetValueOnRenderThread();
+		const uint32 LandscapeClipVersion = FGaussianLandscapeClip::GetVersion_RenderThread();
 
 		bool bCanSkip = GlobalAccumulator->bHasCachedSortData &&
 			GlobalAccumulator->CachedTotalSplatCount == TotalSplatCount &&
-			GlobalAccumulator->CachedViewProjectionMatrix.Equals(CurrentVP, 0.0f);
+			GlobalAccumulator->CachedViewProjectionMatrix.Equals(CurrentVP, 0.0f) &&
+			GlobalAccumulator->CachedLandscapeClipVersion == LandscapeClipVersion;
 
 		if (bCanSkip)
 		{
@@ -287,7 +297,8 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 					GPUResources->CachedSplatScale != Info.Proxy->GetSplatScale() ||
 					GPUResources->CachedErrorThreshold != ProxyErrorThreshold ||
 					GPUResources->CachedDebugMode != CurrentDebugMode ||
-					GPUResources->CachedDebugForceLODLevel != CurrentDebugForceLODLevel)
+					GPUResources->CachedDebugForceLODLevel != CurrentDebugForceLODLevel ||
+					GPUResources->CachedLandscapeClipVersion != LandscapeClipVersion)
 				{
 					bCanSkip = false;
 					break;
@@ -321,7 +332,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 			ERDGPassFlags::Raster,
 			[SceneView, VisibleProxies, TotalSplatCount, bCanSkip, bAllNanite, RawAccumulator,
 			 SharedIndexBuffer, CurrentVP, CurrentDebugMode,
-			 CurrentDebugForceLODLevel, DebugMode, MaxRenderBudget](FRHICommandListImmediate& RHICmdList)
+			 CurrentDebugForceLODLevel, DebugMode, MaxRenderBudget, LandscapeClipVersion](FRHICommandListImmediate& RHICmdList)
 			{
 				if (!SceneView) return;
 				SCOPED_DRAW_EVENT(RHICmdList, GaussianSplatRendering_Global);
@@ -470,6 +481,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 							const auto& Info = ValidProxies[i];
 							FGaussianSplatGPUResources* GPUResources = Info.Proxy->GetGPUResources();
 							if (!GPUResources) continue;  // Extra safety check
+							GPUResources->bClipBelowLandscape = Info.Proxy->GetClipBelowLandscape();
 							int32 SplatCount = Info.Proxy->GetSplatCount();
 							int32 OriginalSplatCount = SplatCount - GPUResources->LODSplatCount;
 
@@ -497,6 +509,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 						RawAccumulator->bHasCachedSortData = true;
 						RawAccumulator->CachedTotalSplatCount = NewTotalSplatCount;
 						RawAccumulator->CachedViewProjectionMatrix = CurrentVP;
+						RawAccumulator->CachedLandscapeClipVersion = LandscapeClipVersion;
 
 						for (int32 i = 0; i < ValidProxies.Num(); i++)
 						{
@@ -513,6 +526,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 								GPUResources->CachedErrorThreshold = FMath::Max(0.1f, Info.Proxy->GetLODErrorThreshold());
 								GPUResources->CachedDebugMode = CurrentDebugMode;
 								GPUResources->CachedDebugForceLODLevel = CurrentDebugForceLODLevel;
+								GPUResources->CachedLandscapeClipVersion = LandscapeClipVersion;
 								GPUResources->bHasCachedSortData = true;
 							}
 							else
@@ -559,6 +573,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 
 							FGaussianSplatGPUResources* GPUResources = Info.Proxy->GetGPUResources();
 							if (!GPUResources) continue;  // Extra safety check
+							GPUResources->bClipBelowLandscape = Info.Proxy->GetClipBelowLandscape();
 
 							// Cluster culling for Nanite-enabled proxies
 							if (GPUResources->bEnableNanite && GPUResources->bHasClusterData)
@@ -591,6 +606,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 						RawAccumulator->bHasCachedSortData = true;
 						RawAccumulator->CachedTotalSplatCount = NewTotalSplatCount;
 						RawAccumulator->CachedViewProjectionMatrix = CurrentVP;
+						RawAccumulator->CachedLandscapeClipVersion = LandscapeClipVersion;
 
 						for (const auto& Info : ValidProxies)
 						{
@@ -604,6 +620,7 @@ void FNanoGSModule::OnPostOpaqueRender_RenderThread(FPostOpaqueRenderParameters&
 							GPUResources->CachedErrorThreshold = FMath::Max(0.1f, Info.Proxy->GetLODErrorThreshold());
 							GPUResources->CachedDebugMode = CurrentDebugMode;
 							GPUResources->CachedDebugForceLODLevel = CurrentDebugForceLODLevel;
+							GPUResources->CachedLandscapeClipVersion = LandscapeClipVersion;
 							GPUResources->bHasCachedSortData = true;
 						}
 					}
@@ -667,6 +684,7 @@ void FNanoGSModule::ShutdownModule()
 		ENQUEUE_RENDER_COMMAND(ReleaseGlobalAccumulator)(
 			[RawAccumulator](FRHICommandListImmediate& RHICmdList)
 			{
+				FGaussianLandscapeClip::Release_RenderThread();
 				RawAccumulator->Release();
 				delete RawAccumulator;
 			});

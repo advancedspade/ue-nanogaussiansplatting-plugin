@@ -331,7 +331,9 @@ public:
 	float CachedErrorThreshold = -1.0f;
 	int32 CachedDebugMode = -1;
 	int32 CachedDebugForceLODLevel = -1;
+	uint32 CachedLandscapeClipVersion = 0;
 	bool bHasCachedSortData = false;
+	bool bClipBelowLandscape = true;
 };
 
 /**
@@ -375,6 +377,7 @@ public:
 	float GetOpacityScale() const { return OpacityScale; }
 	float GetSplatScale() const { return SplatScale; }
 	float GetLODErrorThreshold() const { return LODErrorThreshold; }
+	bool GetClipBelowLandscape() const { return bClipBelowLandscape; }
 
 	/** Check if this proxy is safe to use for rendering.
 	 *  Returns false if proxy is being destroyed or has invalid resources.
@@ -418,6 +421,7 @@ private:
 	float SplatScale = 1.0f;
 	float LODErrorThreshold = 0.03f;
 	bool bEnableFrustumCulling = true;
+	bool bClipBelowLandscape = true;
 
 #if WITH_EDITOR
 	/** Cached hit proxy created in CreateHitProxies, used for editor viewport click selection. */

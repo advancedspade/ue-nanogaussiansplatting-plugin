@@ -9,6 +9,10 @@
 #include "/Engine/Public/Platform.ush"
 #include "/Plugin/NanoGS/Private/GaussianDataTypes.ush"
 
+#if PIXELSHADER
+#include "/Plugin/NanoGS/Private/LandscapeClip.ush"
+#endif
+
 // Velocity encoding matching UE5's Common.ush EncodeVelocityToTexture
 // Velocity is in NDC space [-2, 2] range, encoded to [0, 1] for texture
 // Uses 0.499f to avoid using the full range so that (0,0) clear color is special
@@ -36,6 +40,7 @@ StructuredBuffer<uint> SortKeysBuffer;
 uint SplatCount;
 uint DebugMode;  // 0=off, 1=cluster colors (Nanite-style debug view)
 uint EnableNanite;  // 1=Nanite enabled, 0=disabled (non-Nanite assets hidden in debug mode)
+float4x4 ClipToWorld;
 #endif
 
 // Pixel shader parameters for velocity calculation
@@ -97,6 +102,8 @@ struct FVertexOutput
 	uint DebugFlag : TEXCOORD2;  // 0=normal, 1=debug mode (skip Gaussian)
 	float3 TranslatedWorldPos : TEXCOORD3;  // For velocity calculation in pixel shader
 	float4 CenterClipPos : TEXCOORD4;       // Splat center clip position for velocity (Nanite-style)
+	float3 PixelWorldPos : TEXCOORD5;       // Unprojected quad corner for landscape clip
+	float ClipBelowLandscape : TEXCOORD6;
 };
 
 // Pixel shader output with velocity for TAA/TSR
@@ -127,6 +134,8 @@ FVertexOutput MainVS(
 	Output.DebugFlag = 0;
 	Output.TranslatedWorldPos = viewData.TranslatedWorldPos;
 	Output.CenterClipPos = viewData.ClipPosition;
+	Output.PixelWorldPos = float3(0, 0, 0);
+	Output.ClipBelowLandscape = viewData.TranslatedWorldPosPad;
 
 	// Check validity (w <= 0 means invalid/behind camera)
 	if (viewData.ClipPosition.w <= 0.0)
@@ -137,6 +146,8 @@ FVertexOutput MainVS(
 		Output.Color = float4(0, 0, 0, 0);
 		Output.TranslatedWorldPos = float3(0, 0, 0);
 		Output.CenterClipPos = float4(0, 0, 0, 1);
+		Output.PixelWorldPos = float3(0, 0, 0);
+		Output.ClipBelowLandscape = 0;
 		return Output;
 	}
 
@@ -169,6 +180,8 @@ FVertexOutput MainVS(
 			Output.Position = float4(0, 0, 0, 1);
 			Output.LocalPos = float2(0, 0);
 			Output.Color = float4(0, 0, 0, 0);
+			Output.PixelWorldPos = float3(0, 0, 0);
+			Output.ClipBelowLandscape = 0;
 			return Output;
 		}
 	}
@@ -184,6 +197,9 @@ FVertexOutput MainVS(
 
 	Output.LocalPos = corner;
 
+	float4 worldH = mul(Output.Position, ClipToWorld);
+	Output.PixelWorldPos = worldH.xyz / max(worldH.w, 1e-6);
+
 	return Output;
 }
 
@@ -191,6 +207,12 @@ FVertexOutput MainVS(
 FPixelOutput MainPS(FVertexOutput Input)
 {
 	FPixelOutput Output;
+
+	if (Input.ClipBelowLandscape > 0.5 && IsBelowLandscape(Input.PixelWorldPos))
+	{
+		discard;
+	}
+
 	float4 color = Input.Color;
 
 	// Calculate velocity for TAA/TSR reprojection

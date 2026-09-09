@@ -4,6 +4,7 @@
 #include "GaussianSplatShaders.h"
 #include "GaussianSplatSceneProxy.h"
 #include "GaussianGlobalAccumulator.h"
+#include "GaussianLandscapeClip.h"
 #include "GaussianClusterTypes.h"
 #include "RHICommandList.h"
 #include "RHIGPUReadback.h"
@@ -21,6 +22,7 @@
 // Console variables (declared in GaussianSplatting.cpp)
 extern TAutoConsoleVariable<int32> CVarShowClusterBounds;
 extern TAutoConsoleVariable<int32> CVarDebugForceLODLevel;
+extern TAutoConsoleVariable<float> CVarLandscapeClipBias;
 
 // Helper: Set pixel shader velocity parameters using self-tracked previous frame data.
 // UE5's PrevViewInfo is not populated for PostOpaqueRender callbacks, so we store
@@ -106,6 +108,47 @@ static FMatrix ComputeWorldToPLY(const FMatrix& LocalToWorld)
 		FPlane(0, 0, 0, 1)
 	);
 	return LocalToWorld.Inverse() * LocalToPLY;
+}
+
+static void BindLandscapeClipCS(
+	FGaussianSplatCalcViewDataCS::FParameters& Parameters,
+	const FGaussianSplatGPUResources* GPUResources)
+{
+	const FGaussianLandscapeClipShaderParams Clip = FGaussianLandscapeClip::Get_RenderThread();
+	Parameters.LandscapeHeightTexture = Clip.HeightTexture;
+	Parameters.LandscapeHeightSampler = Clip.Sampler;
+	Parameters.LandscapeOrigin = Clip.Origin;
+	Parameters.LandscapeHalfExtent = Clip.HalfExtent;
+	Parameters.LandscapeScaleXY = Clip.ScaleXY;
+	Parameters.LandscapeScaleZ = Clip.ScaleZ;
+	Parameters.LandscapeZOffset = Clip.ZOffset;
+	Parameters.LandscapeCenterZ = Clip.CenterZ;
+	Parameters.LandscapeDimensions = Clip.Dimensions;
+	Parameters.LandscapeClipBias = CVarLandscapeClipBias.GetValueOnRenderThread();
+
+	const bool bWantClip = !GPUResources || GPUResources->bClipBelowLandscape;
+	Parameters.ClipBelowLandscape = (bWantClip && Clip.bEnabled) ? 1u : 0u;
+}
+
+static void BindLandscapeClipPS(FGaussianSplatPS::FParameters& Parameters)
+{
+	const FGaussianLandscapeClipShaderParams Clip = FGaussianLandscapeClip::Get_RenderThread();
+	Parameters.LandscapeHeightTexture = Clip.HeightTexture;
+	Parameters.LandscapeHeightSampler = Clip.Sampler;
+	Parameters.LandscapeOrigin = Clip.Origin;
+	Parameters.LandscapeHalfExtent = Clip.HalfExtent;
+	Parameters.LandscapeScaleXY = Clip.ScaleXY;
+	Parameters.LandscapeScaleZ = Clip.ScaleZ;
+	Parameters.LandscapeZOffset = Clip.ZOffset;
+	Parameters.LandscapeCenterZ = Clip.CenterZ;
+	Parameters.LandscapeDimensions = Clip.Dimensions;
+	Parameters.LandscapeClipBias = CVarLandscapeClipBias.GetValueOnRenderThread();
+}
+
+static FMatrix44f ComputeClipToWorld(const FSceneView& View)
+{
+	const FMatrix WorldToClip = View.ViewMatrices.GetViewMatrix() * View.ViewMatrices.GetProjectionNoAAMatrix();
+	return FMatrix44f(WorldToClip.Inverse());
 }
 
 void FGaussianSplatRenderer::DispatchCalcViewData(
@@ -200,6 +243,8 @@ void FGaussianSplatRenderer::DispatchCalcViewData(
 	Parameters.ProxyIndex = 0;
 	Parameters.UseGlobalCompactionPath = 0;
 	Parameters.MaxRenderBudget = 0;
+	Parameters.GlobalBaseOffset = 0;
+	BindLandscapeClipCS(Parameters, GPUResources);
 
 	// Dispatch compute shader
 	const uint32 ThreadGroupSize = 256;
@@ -620,12 +665,14 @@ void FGaussianSplatRenderer::DrawSplats(
 	VSParameters.DebugMode = static_cast<uint32>(FMath::Max(0, CVarShowClusterBounds.GetValueOnRenderThread()));
 	// Pass Nanite enabled state for debug visualization (non-Nanite assets render black in debug mode)
 	VSParameters.EnableNanite = GPUResources->bEnableNanite ? 1 : 0;
+	VSParameters.ClipToWorld = ComputeClipToWorld(View);
 
 	SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
 
 	// Pixel shader parameters
 	FGaussianSplatPS::FParameters PSParameters;
 	SetVelocityPSParameters(PSParameters, View, nullptr);
+	BindLandscapeClipPS(PSParameters);
 	SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), PSParameters);
 
 	// Draw instanced quads
@@ -840,6 +887,7 @@ void FGaussianSplatRenderer::DispatchCalcViewDataCompacted(
 	Parameters.ProxyIndex = 0;
 	Parameters.UseGlobalCompactionPath = 0;
 	Parameters.MaxRenderBudget = 0;
+	BindLandscapeClipCS(Parameters, GPUResources);
 
 	// INDIRECT DISPATCH using prepared args
 	SetComputePipelineState(RHICmdList, ComputeShader.GetComputeShader());
@@ -988,6 +1036,7 @@ void FGaussianSplatRenderer::DispatchCalcViewDataGlobal(
 	Parameters.ProxyIndex = 0;
 	Parameters.UseGlobalCompactionPath = 0;
 	Parameters.MaxRenderBudget = 0;
+	BindLandscapeClipCS(Parameters, GPUResources);
 
 	const uint32 ThreadGroupSize = 256;
 	const uint32 NumGroups = FMath::DivideAndRoundUp((uint32)SplatCount, ThreadGroupSize);
@@ -1231,11 +1280,13 @@ void FGaussianSplatRenderer::DrawSplatsGlobal(
 	VSParameters.SplatCount = TotalSplatCount;
 	VSParameters.DebugMode = static_cast<uint32>(FMath::Max(0, DebugMode));
 	VSParameters.EnableNanite = 1;
+	VSParameters.ClipToWorld = ComputeClipToWorld(View);
 
 	SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
 
 	FGaussianSplatPS::FParameters PSParameters;
 	SetVelocityPSParameters(PSParameters, View, GlobalAccumulator);
+	BindLandscapeClipPS(PSParameters);
 	SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), PSParameters);
 
 	RHICmdList.SetStreamSource(0, nullptr, 0);
@@ -1428,6 +1479,7 @@ void FGaussianSplatRenderer::DispatchCalcViewDataCompactedGlobal(
 	Parameters.UseSHRendering = (EffectiveSHOrder > 0) ? 1 : 0;
 	Parameters.OpacityScale  = OpacityScale;
 	Parameters.SplatScale    = SplatScale;
+	BindLandscapeClipCS(Parameters, GPUResources);
 
 	// Use the per-proxy indirect dispatch args (filled by DispatchPrepareIndirectArgs)
 	SetComputePipelineState(RHICmdList, ComputeShader.GetComputeShader());
@@ -1667,11 +1719,13 @@ void FGaussianSplatRenderer::DrawSplatsGlobalIndirect(
 	VSParameters.SplatCount      = GlobalAccumulator->AllocatedCount;  // Upper bound for VS guard
 	VSParameters.DebugMode       = static_cast<uint32>(FMath::Max(0, DebugMode));
 	VSParameters.EnableNanite    = 1;
+	VSParameters.ClipToWorld     = ComputeClipToWorld(View);
 
 	SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
 
 	FGaussianSplatPS::FParameters PSParameters;
 	SetVelocityPSParameters(PSParameters, View, GlobalAccumulator);
+	BindLandscapeClipPS(PSParameters);
 	SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), PSParameters);
 
 	RHICmdList.SetStreamSource(0, nullptr, 0);

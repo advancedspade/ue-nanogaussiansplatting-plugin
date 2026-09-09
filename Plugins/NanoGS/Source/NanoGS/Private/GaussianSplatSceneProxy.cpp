@@ -687,6 +687,7 @@ FGaussianSplatSceneProxy::FGaussianSplatSceneProxy(const UGaussianSplatComponent
 	, SplatScale(InComponent->SplatScale)
 	, LODErrorThreshold(InComponent->LODErrorThreshold)
 	, bEnableFrustumCulling(InComponent->bEnableFrustumCulling)
+	, bClipBelowLandscape(InComponent->bClipBelowLandscape)
 {
 	bWillEverBeLit = false;
 }

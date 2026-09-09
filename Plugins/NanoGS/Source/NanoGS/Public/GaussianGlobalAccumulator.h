@@ -101,6 +101,7 @@ struct NANOGS_API FGaussianGlobalAccumulator
 	bool bHasCachedSortData = false;
 	uint32 CachedTotalSplatCount = 0;
 	FMatrix CachedViewProjectionMatrix = FMatrix::Identity;
+	uint32 CachedLandscapeClipVersion = 0;
 
 	//----------------------------------------------------------------------
 	// Previous frame data for velocity calculation (per-view)

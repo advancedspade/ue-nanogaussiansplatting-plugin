@@ -58,6 +58,17 @@ class FGaussianSplatCalcViewDataCS : public FGlobalShader
 		SHADER_PARAMETER(uint32, ProxyIndex)               // which proxy index this dispatch belongs to
 		SHADER_PARAMETER(uint32, UseGlobalCompactionPath)  // 1 = read base from GlobalBaseOffsetsBuffer[ProxyIndex]
 		SHADER_PARAMETER(uint32, MaxRenderBudget)          // Budget cap: skip writes at indices >= this value (0 = no cap)
+		SHADER_PARAMETER_TEXTURE(Texture2D, LandscapeHeightTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, LandscapeHeightSampler)
+		SHADER_PARAMETER(uint32, ClipBelowLandscape)
+		SHADER_PARAMETER(FVector3f, LandscapeOrigin)
+		SHADER_PARAMETER(FVector2f, LandscapeHalfExtent)
+		SHADER_PARAMETER(float, LandscapeScaleXY)
+		SHADER_PARAMETER(float, LandscapeScaleZ)
+		SHADER_PARAMETER(float, LandscapeZOffset)
+		SHADER_PARAMETER(float, LandscapeCenterZ)
+		SHADER_PARAMETER(FVector2f, LandscapeDimensions)
+		SHADER_PARAMETER(float, LandscapeClipBias)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -187,6 +198,7 @@ class FGaussianSplatVS : public FGlobalShader
 		SHADER_PARAMETER(uint32, SplatCount)
 		SHADER_PARAMETER(uint32, DebugMode)  // 0=off, 1=cluster colors (Nanite-style debug)
 		SHADER_PARAMETER(uint32, EnableNanite)  // 1=Nanite enabled, 0=disabled (hidden in debug mode)
+		SHADER_PARAMETER(FMatrix44f, ClipToWorld)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -211,6 +223,16 @@ class FGaussianSplatPS : public FGlobalShader
 		SHADER_PARAMETER(FVector3f, PreViewTranslation)
 		// Previous frame's PreViewTranslation for correct velocity calculation
 		SHADER_PARAMETER(FVector3f, PrevPreViewTranslation)
+		SHADER_PARAMETER_TEXTURE(Texture2D, LandscapeHeightTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, LandscapeHeightSampler)
+		SHADER_PARAMETER(FVector3f, LandscapeOrigin)
+		SHADER_PARAMETER(FVector2f, LandscapeHalfExtent)
+		SHADER_PARAMETER(float, LandscapeScaleXY)
+		SHADER_PARAMETER(float, LandscapeScaleZ)
+		SHADER_PARAMETER(float, LandscapeZOffset)
+		SHADER_PARAMETER(float, LandscapeCenterZ)
+		SHADER_PARAMETER(FVector2f, LandscapeDimensions)
+		SHADER_PARAMETER(float, LandscapeClipBias)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

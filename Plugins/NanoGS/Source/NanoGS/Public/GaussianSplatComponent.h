@@ -84,6 +84,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaussian Splatting|Performance", meta = (ClampMin = "0.001", ClampMax = "1.0"))
 	float LODErrorThreshold = 0.03f;
 
+	/** Hide splats whose world position is below the procedural landscape heightmap. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gaussian Splatting|Rendering")
+	bool bClipBelowLandscape = true;
+
 protected:
 	/** Called when the asset changes */
 	void OnAssetChanged();

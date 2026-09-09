@@ -3,6 +3,7 @@
 //Purpose: Transform 3D splat data → 2D screen-space data
 
 #include "/Plugin/NanoGS/Private/GaussianSplatting.ush"
+#include "/Plugin/NanoGS/Private/LandscapeClip.ush"
 
 // Shader parameters
 ByteAddressBuffer PackedSplatBuffer;  // 16 bytes/splat packed data
@@ -48,6 +49,7 @@ StructuredBuffer<uint> GlobalBaseOffsetsBuffer; // [MAX_PROXY_COUNT+1] prefix su
 uint ProxyIndex;             // Index of this proxy in the global array
 uint UseGlobalCompactionPath; // 1 = read offset from GlobalBaseOffsetsBuffer[ProxyIndex]
 uint MaxRenderBudget; // Budget cap: skip writes at indices >= this value (0 = no cap)
+uint ClipBelowLandscape;
 
 // Check if a leaf cluster is visible using the visibility bitmap
 bool IsClusterVisible(uint clusterIndex)
@@ -103,6 +105,12 @@ void ProcessSplat(uint splatIndex, uint outputIndex, uint selectedClusterID, uin
 
 	// Cull if behind camera
 	if (clipPos.w <= 0.0)
+	{
+		WriteInvalidSplat(outputIndex, selectedClusterID, selectedLODLevel);
+		return;
+	}
+
+	if (ClipBelowLandscape != 0u && IsBelowLandscape(worldPos.xyz))
 	{
 		WriteInvalidSplat(outputIndex, selectedClusterID, selectedLODLevel);
 		return;
@@ -211,7 +219,7 @@ void ProcessSplat(uint splatIndex, uint outputIndex, uint selectedClusterID, uin
 	FGaussianSplatViewData viewData;
 	viewData.ClipPosition = clipPos;
 	viewData.TranslatedWorldPos = translatedWorldPos;
-	viewData.TranslatedWorldPosPad = 0;
+	viewData.TranslatedWorldPosPad = (ClipBelowLandscape != 0u) ? 1.0 : 0.0;
 	viewData.PackedColorRG = PackHalf2x16(finalColor.rg);
 	viewData.PackedColorBA = PackHalf2x16(float2(finalColor.b, opacity));
 	viewData.Axis1 = axis1;
