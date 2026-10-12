@@ -19,5 +19,9 @@ Plugins/**/Intermediate/
 # Debug symbols should never be tracked
 *.pdb
 
+# VIM swap files
+*.swp
+*.swo
+
 ### claude ###
 .claude/
